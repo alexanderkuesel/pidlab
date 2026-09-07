@@ -1,0 +1,338 @@
+[
+  {
+    "id": "pidlab_tab",
+    "type": "tab",
+    "label": "PID Lab v2",
+    "disabled": false,
+    "info": "Self-contained PID tuning bench.\n\nOpen http://<host>:1880/pidlab\n\nNo extra palette nodes required."
+  },
+  {
+    "id": "n_init",
+    "type": "inject",
+    "z": "pidlab_tab",
+    "name": "seed on deploy",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "0.2",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 150,
+    "y": 80,
+    "wires": [
+      [
+        "n_seed",
+        "n_plants"
+      ]
+    ]
+  },
+  {
+    "id": "n_seed",
+    "type": "function",
+    "z": "pidlab_tab",
+    "name": "init context",
+    "func": "// Seeds the loop on deploy. Plant characteristics live in the\n// \"process library\" node next door -- edit that to add your own.\nvar cfg = {\n  preset: 'bench',\n  ts: 0.2,            // controller scan AND integration step, seconds\n  window: 180,        // trend width, seconds of process time\n\n  // --- plant -------------------------------------------------------\n  model: 'fopdt',     // 'fopdt' (self-regulating) | 'integrating' (level)\n  K: 1.6,             // process gain, %PV per %OP\n  tau: 12.0,          // dominant time constant, s\n  theta: 3.0,         // dead time, s\n  Ki: 0.35,           // ramp rate for the integrating plant, %PV/s per %OP\n  lead: 0.0,          // inverse-response time, s (>0 = shrink and swell)\n  tau2: 0.0,          // second-order stage, s (0 = off)\n  zeta2: 1.0,         // its damping ratio (<1 = resonant)\n  rate: 0.0,          // actuator slew limit, %/s (0 = unlimited)\n  pvBias: 8.0,        // PV with the valve shut\n  noise: 0.25,        // measurement noise, 1 sigma in %\n  dist: 0.0,          // load disturbance, in %OP at the valve\n\n  // --- controller (ISA / dependent form, Ti and Td in SECONDS) ------\n  extPID: false,      // true = OpenPLC drives OP over Modbus\n  auto: false,        // start in MANUAL, bump test first, then go to auto\n  action: 'reverse',  // 'reverse' = output falls as PV rises\n  sp: 50.0,\n  Kc: 1.0,\n  Ti: 20.0,\n  Td: 0.0,\n  bias: 0.0,          // manual reset. Only bites when Ti = 0; with integral\n                      // action the integral absorbs it within a few Ti.\n  N: 10,              // derivative filter ratio, Tf = Td/N\n  opMan: 30.0,\n  opMin: 0.0,\n  opMax: 100.0\n};\n\nflow.set('cfg', cfg);\nflow.set('st', {\n  simT: 0,                       // process clock, ms -- not wall clock\n  pvTrue: cfg.K * cfg.opMan + cfg.pvBias, pv: cfg.K * cfg.opMan + cfg.pvBias,\n  pvf: cfg.K * cfg.opMan + cfg.pvBias, pvfPrev: cfg.K * cfg.opMan + cfg.pvBias,\n  lag1: cfg.K * cfg.opMan + cfg.pvBias,\n  y2: cfg.K * cfg.opMan + cfg.pvBias, v2: 0,\n  op: cfg.opMan, opRL: cfg.opMan, I: cfg.opMan - cfg.bias, delay: [],\n  P: 0, D: 0, e: 0,\n  iae: 0, tEvent: 0, pvAtEvent: 0, peak: 0, tSettle: 0\n});\nflow.set('hist', []);",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 350,
+    "y": 80,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "n_plants",
+    "type": "function",
+    "z": "pidlab_tab",
+    "name": "process library",
+    "func": "// ====================================================================\n//  PROCESS LIBRARY  -- edit this node to add your own plants.\n//  Every key is optional; anything you leave out keeps its current\n//  value. Selecting a preset always resets the loop to manual.\n//\n//    ts     controller scan and integration step, s\n//           time compression on the trend is ts/0.2 -- a boiler at\n//           ts=5 runs 25x faster than real life, which is the only\n//           way a 90 s time constant is practical to tune by hand\n//    window trend width, s of process time\n//    lead   inverse response, s  (>0 = PV moves the wrong way first)\n//    tau2   second-order stage, s;  zeta2 < 1 makes it resonant\n//    rate   actuator slew limit, %/s\n//    pv0    where PV sits at the starting output (bias is derived)\n// ====================================================================\nflow.set('plants', {\n\n  bench: {\n    icon: 'hx', role: 'Well behaved',\n    pv: 'Outlet temperature', mv: 'Steam valve position, %',\n    fce: 'Globe control valve, pneumatic positioner',\n    fceNote: 'Fast, near-linear, no meaningful stroke limit. Nothing here will surprise you, which is the point.',\n    name: 'Bench FOPDT',\n    note: 'Generic self-regulating loop -- a heat exchanger or a flow loop. Start here; the mechanics are easiest to see when nothing exotic is happening.',\n    ts: 0.2, window: 180,\n    model: 'fopdt', K: 1.6, tau: 12, theta: 3, pv0: 48, noise: 0.25,\n    lead: 0, tau2: 0, zeta2: 1, rate: 0, opMan: 30, sp: 50\n  },\n\n  pv_voltvar: {\n    icon: 'sun', role: 'Dead-time dominant',\n    pv: 'Voltage at the point of interconnection', mv: 'Fleet reactive power command, % of Qmax',\n    fce: 'PV inverters, Q setpoint written over SCADA',\n    fceNote: 'The plant controller writes a reactive setpoint and several hundred inverters answer within a few hundred ms. The delay is the controller scan plus the comms round trip out and the metering coming back, not the inverters being slow.',\n    name: 'PV plant volt/VAR at the POI',\n    note: 'Plant controller trims inverter reactive setpoints to hold voltage at the point of interconnection. The lag is the inverters answering (fast); the dead time is the plant-controller scan plus the comms round trip out to the fleet and back through metering. theta/tau is about 2.5, so this is dead-time dominant and there is very little gain available.',\n    ts: 0.2, window: 120,\n    model: 'fopdt', K: 1.2, tau: 0.8, theta: 2.0, pv0: 50, noise: 0.35,\n    lead: 0, tau2: 0, zeta2: 1, rate: 0, opMan: 50, sp: 50\n  },\n\n  pv_weakgrid: {\n    icon: 'sunweak', role: 'Gain you do not control',\n    pv: 'Voltage at the point of interconnection', mv: 'Fleet reactive power command, % of Qmax',\n    fce: 'PV inverters, Q setpoint written over SCADA',\n    fceNote: 'Same hardware as the strong-grid case. Only the grid behind it changed, and that is enough to undo your tuning.',\n    name: 'PV volt/VAR, weak grid',\n    note: 'The same plant on a weak interconnection. dV/dQ is nearly three times higher because process gain in a volt/VAR loop is set by grid strength -- and grid strength changes with line outages and neighbouring generation. A tune that was comfortable on the strong-grid case will hunt here. Tune for the weakest case you expect to see.',\n    ts: 0.2, window: 120,\n    model: 'fopdt', K: 3.2, tau: 0.8, theta: 2.0, pv0: 50, noise: 0.45,\n    lead: 0, tau2: 0, zeta2: 1, rate: 0, opMan: 50, sp: 50\n  },\n\n  boiler_drum: {\n    icon: 'drum', role: 'Lies to you first',\n    pv: 'Drum level, % of span', mv: 'Feedwater flow demand, %',\n    fce: 'Feedwater regulating valve',\n    fceNote: 'On most units this is really a cascade: this demand goes to a feedwater flow controller, and that one strokes the valve. Single-element control, which is what you have here, is the hard version.',\n    name: 'Boiler drum level',\n    note: 'Integrating and inverse responding. Open feedwater and the level DROPS first, because cold water collapses steam bubbles below the surface, then it ramps up. Anything that reacts to the first few seconds of trend does exactly the wrong thing. Noisy too -- the surface is boiling. This is why real units run three-element control instead of a single PID.',\n    ts: 0.5, window: 600,\n    model: 'integrating', Ki: 0.15, theta: 2, lead: 6, pv0: 50, noise: 0.8,\n    tau2: 0, zeta2: 1, rate: 0, opMan: 50, sp: 50\n  },\n\n  boiler_superheat: {\n    icon: 'coil', role: 'Slow and layered',\n    pv: 'Final steam temperature', mv: 'Attemperator spray flow, %',\n    fce: 'Desuperheater spray water control valve',\n    fceNote: 'Spray water evaporates fast, but the tube metal downstream does not. That second thermal mass is the tau2 term, and it is why the half rule matters here.',\n    name: 'Boiler superheat steam temperature',\n    note: 'Spray attemperator to final steam temperature. Long lag, long dead time, and a second thermal lag in the tube metal. Running at ts=5 s so a test takes a minute instead of half an hour. Real units cascade a fast spray-outlet loop inside this one, which is the honest answer to how slow it is.',\n    ts: 5, window: 3000,\n    model: 'fopdt', K: 1.1, tau: 90, theta: 25, tau2: 40, zeta2: 1,\n    pv0: 55, noise: 0.3, lead: 0, rate: 0, opMan: 25, sp: 55\n  },\n\n  wind_pitch: {\n    icon: 'wind', role: 'Fights the structure',\n    pv: 'Rotor speed, % of rated', mv: 'Collective blade pitch demand',\n    fce: 'Electric pitch drives, three blades',\n    fceNote: 'The drives cannot slew faster than 6 %/s of pitch range, so above a certain gain the controller is asking for motion it will never get. Signs are normalised: real pitch has negative process gain and a direct-acting controller.',\n    name: 'Wind turbine collective pitch',\n    note: 'Above rated wind, pitch holds rotor speed. Fast loop, almost no dead time -- but the pitch drives are rate limited to 6 %/s and there is a lightly damped tower fore-aft mode near 0.3 Hz sitting inside the loop. Push the gain and you will not lose the speed loop, you will excite the tower. Signs are normalised here: real pitch has negative process gain and a direct-acting controller.',\n    ts: 0.1, window: 120,\n    model: 'fopdt', K: 1.4, tau: 2.5, theta: 0.3, tau2: 0.55, zeta2: 0.15,\n    rate: 6, lead: 0, pv0: 50, noise: 0.3, opMan: 35, sp: 50\n  }\n\n});",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 350,
+    "y": 130,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "n_scan",
+    "type": "inject",
+    "z": "pidlab_tab",
+    "name": "scan 200 ms",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "0.2",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "1",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 145,
+    "y": 160,
+    "wires": [
+      [
+        "n_proc"
+      ]
+    ]
+  },
+  {
+    "id": "n_proc",
+    "type": "function",
+    "z": "pidlab_tab",
+    "name": "plant",
+    "func": "// Plant. One scan: slew limit -> dead time -> dynamics -> noise.\n// Consumes the OP the controller left last scan; a PLC behaves the same.\nvar c = flow.get('cfg'), s = flow.get('st');\nvar Ts = c.ts;\n\ns.simT += Ts * 1000;\n\n// --- actuator slew limit (pitch drives, big valves, tap changers) ---\nvar tgt = s.op;\nif (c.rate > 0) {\n  var lim = c.rate * Ts;\n  s.opRL += Math.max(-lim, Math.min(lim, tgt - s.opRL));\n} else {\n  s.opRL = tgt;\n}\n\n// --- transport delay -----------------------------------------------\nvar nD = Math.max(0, Math.round(c.theta / Ts));\ns.delay.push(s.opRL);\nvar u = (s.delay.length > nD) ? s.delay.shift() : s.delay[0];\n\nu = u + c.dist;              // load disturbance enters at the actuator\n\n// --- dominant dynamics ---------------------------------------------\nvar y;\nif (c.model === 'integrating') {\n  // k'(1 - lead*s)/s : level ramps, but dips first if lead > 0\n  s.lag1 += Ts * c.Ki * (u - 50);\n  s.lag1 = Math.min(200, Math.max(-100, s.lag1));\n  y = s.lag1 - c.Ki * c.lead * (u - 50);\n} else {\n  // K(1 - lead*s)/(tau*s + 1), exact ZOH on the lag\n  var a = Math.exp(-Ts / Math.max(c.tau, 1e-6));\n  s.lag1 = a * s.lag1 + (1 - a) * (c.K * u + c.pvBias);\n  if (c.lead !== 0) {\n    var xu = c.K * u + c.pvBias;\n    y = s.lag1 * (1 + c.lead / c.tau) - xu * (c.lead / c.tau);\n  } else {\n    y = s.lag1;\n  }\n}\n\n// --- optional second-order stage ------------------------------------\n// zeta2 = 1 is a second thermal lag; zeta2 << 1 is a structural mode\n// (tower fore-aft, drive train) sitting inside the loop.\nif (c.tau2 > 0) {\n  // Exact zero-order-hold discretisation of wn^2/(s^2 + 2*z*wn*s + wn^2).\n  // Euler gets the ring frequency wrong by tens of percent at these step\n  // sizes, which matters when the whole point is where the mode sits.\n  var wn = 1 / c.tau2, z = c.zeta2, sg = z * wn, E = Math.exp(-sg * Ts), co, si;\n  if (z < 1) {\n    var wd = wn * Math.sqrt(1 - z * z);\n    co = Math.cos(wd * Ts); si = Math.sin(wd * Ts) / wd;\n  } else if (z > 1) {\n    var wh = wn * Math.sqrt(z * z - 1);\n    co = Math.cosh(wh * Ts); si = Math.sinh(wh * Ts) / wh;\n  } else { co = 1; si = Ts; }\n  var f11 = E * (co + sg * si), f12 = E * si;\n  var f21 = -E * wn * wn * si,  f22 = E * (co - sg * si);\n  var yN = f11 * s.y2 + f12 * s.v2 + (1 - f11) * y;\n  s.v2   = f21 * (s.y2 - y) + f22 * s.v2;\n  s.y2   = yN;\n  y = s.y2;\n} else {\n  s.y2 = y; s.v2 = 0;\n}\n\ns.pvTrue = Math.min(160, Math.max(-60, y));\n\n// --- measurement ----------------------------------------------------\nvar n = 0;\nif (c.noise > 0) {\n  var r1 = Math.random() || 1e-9, r2 = Math.random();\n  n = c.noise * Math.sqrt(-2 * Math.log(r1)) * Math.cos(2 * Math.PI * r2);\n}\ns.pv = s.pvTrue + n;\n\nflow.set('st', s);\nmsg.payload = { pv: s.pv };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 160,
+    "wires": [
+      [
+        "n_pid"
+      ]
+    ]
+  },
+  {
+    "id": "n_pid",
+    "type": "function",
+    "z": "pidlab_tab",
+    "name": "PID (ISA form)",
+    "func": "// ISA (dependent) form PID, written the way a decent PLC block behaves:\n// derivative on the measurement, filtered derivative, back-calculation\n// anti-windup, bumpless manual-to-auto.\nvar c = flow.get('cfg'), s = flow.get('st');\nvar Ts = c.ts, pv = msg.payload.pv, sp = c.sp;\n\nif (c.extPID) {\n  // OP is being written by OpenPLC over Modbus. Skip the internal\n  // controller but keep trending and scoring the loop.\n  s.pvf = pv; s.pvfPrev = pv;\n} else {\n\nvar sign = (c.action === 'direct') ? -1 : 1;\nvar e = sign * (sp - pv);\n\n// derivative acts on PV, so a setpoint step produces no derivative kick\nvar Tf = (c.Td > 0) ? c.Td / Math.max(c.N, 1) : Ts;\ns.pvf += (Ts / (Tf + Ts)) * (pv - s.pvf);\nvar D = 0;\nif (c.Td > 0) D = -sign * c.Kc * c.Td * (s.pvf - s.pvfPrev) / Ts;\ns.pvfPrev = s.pvf;\n\nvar P = c.Kc * e;\n\n// I is the AUTOMATIC reset, bias is the MANUAL one. With no integral action\n// there is no automatic reset at all, so fold whatever the integral was\n// holding into bias -- bumpless, and it keeps the displayed equation exact.\nif (c.Ti <= 0 && s.I !== 0) { c.bias += s.I; s.I = 0; flow.set('cfg', c); }\n\ns.P = P; s.D = D; s.e = e;\n\nif (c.auto && c.Ti > 0) s.I += c.Kc * (Ts / c.Ti) * e;\n\nvar op = P + s.I + D + c.bias;\nvar opSat = Math.min(c.opMax, Math.max(c.opMin, op));\n\nif (!c.auto) {\n  // track, so the flip to auto is bumpless -- via the integral if there is\n  // one, otherwise via bias, which is exactly what manual reset means\n  if (c.Ti > 0) { s.I = c.opMan - P - D - c.bias; }\n  else { s.I = 0; c.bias = c.opMan - P - D; flow.set('cfg', c); }\n  s.op = Math.min(c.opMax, Math.max(c.opMin, c.opMan));\n} else {\n  // P-only cannot wind up, so only back-calculate when integral is running\n  if (opSat !== op && c.Ti > 0) s.I = opSat - P - D - c.bias;\n  s.op = opSat;\n}\n\n}   // end internal controller\n\n// --- response scoring, reset by the UI on every SP or load change ---\ns.iae += Math.abs(sp - pv) * Ts;\ns.tEvent += Ts;\nvar step = sp - s.pvAtEvent;\nif (Math.abs(step) > 1) {\n  if (step > 0 ? (pv > s.peak) : (pv < s.peak)) s.peak = pv;\n  if (Math.abs(sp - pv) > 0.02 * Math.abs(step)) s.tSettle = s.tEvent;\n}\n\nflow.set('st', s);\n\nvar h = flow.get('hist');\nh.push([s.simT, +sp.toFixed(3), +pv.toFixed(3), +s.op.toFixed(3), +s.opRL.toFixed(3)]);\nwhile (h.length > 6000) h.shift();\nflow.set('hist', h);\n\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 500,
+    "y": 160,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "n_pagein",
+    "type": "http in",
+    "z": "pidlab_tab",
+    "name": "",
+    "url": "/pidlab",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 260,
+    "wires": [
+      [
+        "n_page"
+      ]
+    ]
+  },
+  {
+    "id": "n_page",
+    "type": "template",
+    "z": "pidlab_tab",
+    "name": "UI",
+    "field": "payload",
+    "fieldType": "msg",
+    "format": "html",
+    "syntax": "plain",
+    "template": "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Loop 101 &mdash; tuning bench</title>\n<style>\n  :root{\n    --field:#b4b7b0;      /* panel field, ISA-101 style low-chroma grey */\n    --panel:#d9dad4;\n    --panel-2:#cbccc5;\n    --ink:#23262a;\n    --ink-2:#5c6167;\n    --rule:#8f938c;\n    --pv:#1d6b4f;\n    --sp:#a8322a;\n    --op:#2b4f8c;\n    --warn:#b5651d;\n  }\n  *{box-sizing:border-box}\n  html,body{margin:0;padding:0}\n  body{\n    background:var(--field);\n    color:var(--ink);\n    font-family:system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif;\n    font-size:14px;line-height:1.45;\n    padding:14px;\n  }\n  .val,input[type=number]{\n    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;\n    font-variant-numeric:tabular-nums;\n  }\n  h1{\n    font-size:15px;font-weight:600;margin:0 0 2px;letter-spacing:.01em;\n  }\n  .sub{color:var(--ink-2);font-size:12px;margin:0 0 12px}\n  .bench{display:flex;gap:12px;align-items:stretch;flex-wrap:wrap}\n  .trend{\n    flex:1 1 520px;min-width:300px;background:var(--panel);\n    border:1px solid var(--rule);padding:8px;\n  }\n  canvas{display:block;width:100%;height:340px}\n  .face{\n    flex:0 0 168px;background:var(--panel);border:1px solid var(--rule);\n    padding:10px;display:flex;flex-direction:column;gap:10px;\n  }\n  .fp{display:grid;grid-template-columns:26px 1fr;gap:8px;align-items:end}\n  .bar{height:74px;background:var(--panel-2);border:1px solid var(--rule);\n       position:relative;overflow:hidden}\n  .bar i{position:absolute;left:0;right:0;bottom:0;display:block}\n  .fp .lbl{font-size:11px;color:var(--ink-2);margin:0}\n  .fp .num{font-size:22px;line-height:1;margin:2px 0 0}\n  .mode{display:flex;border:1px solid var(--rule)}\n  .mode button{\n    flex:1;padding:6px 0;border:0;background:var(--panel-2);color:var(--ink-2);\n    font:inherit;font-size:12px;cursor:pointer\n  }\n  .mode button[aria-pressed=true]{background:var(--ink);color:#f0f0ec}\n  .mode button:focus-visible{outline:2px solid var(--warn);outline-offset:-2px}\n  .rail{\n    margin-top:12px;display:grid;gap:12px;\n    grid-template-columns:repeat(auto-fit,minmax(240px,1fr));\n  }\n  .chain{margin-top:14px;display:flex;gap:0;align-items:stretch;flex-wrap:wrap}\n  .chain .grp{flex:1 1 270px;min-width:250px;margin:0}\n  .link{flex:0 0 74px;display:flex;flex-direction:column;justify-content:center;\n        align-items:center;gap:3px;padding:0 4px}\n  .link .sig{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;\n             font-variant-numeric:tabular-nums;color:var(--ink)}\n  .link .tag{font-size:10px;color:var(--ink-2);letter-spacing:.02em}\n  .link .ar{width:100%;height:1px;background:var(--rule);position:relative}\n  .link .ar:after{content:'';position:absolute;right:0;top:-3px;\n                  border-left:6px solid var(--rule);border-top:3.5px solid transparent;\n                  border-bottom:3.5px solid transparent}\n  @media (max-width:900px){\n    .link{flex:1 1 100%;flex-direction:row;padding:7px 0}\n    .link .ar{width:40px}\n  }\n  .ret{display:flex;align-items:center;gap:8px;margin:0;padding:6px 10px;\n       border:1px solid var(--rule);border-top:0;background:var(--panel-2);\n       font-size:11px;color:var(--ink-2)}\n  .ret b{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:400;\n         font-size:12px;color:var(--ink)}\n  .idcard{display:grid;grid-template-columns:34px 1fr;gap:9px;align-items:start;\n          margin-bottom:9px}\n  .glyph{display:block;width:32px;height:32px;color:var(--ink)}\n  .glyph svg{width:100%;height:100%;fill:none;stroke:currentColor;\n             stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}\n  .idname{margin:0;font-size:13px;font-weight:600;line-height:1.25}\n  .idrole{margin:1px 0 0;font-size:11px;color:var(--ink-2)}\n  .pips{margin:3px 0 0;font-size:10px;letter-spacing:2px;color:var(--warn)}\n  .pick{width:100%;padding:6px;border:1px solid var(--rule);background:var(--panel-2);\n        color:var(--ink);font:inherit;font-size:12px;cursor:pointer;margin-bottom:8px}\n  .pick:hover{background:var(--field)}\n  .mvline{margin:0 0 2px;font-size:13px;font-weight:600}\n  .fceline{margin:0 0 8px;font-size:12px;color:var(--ink-2)}\n  .pickwrap{position:fixed;inset:0;background:rgba(35,38,42,.55);z-index:50;\n            display:flex;align-items:flex-start;justify-content:center;padding:24px;\n            overflow:auto}\n  .pickbox{background:var(--panel);border:1px solid var(--rule);max-width:900px;\n           width:100%;padding:14px}\n  .pickhead{display:flex;justify-content:space-between;align-items:baseline;\n            margin-bottom:10px}\n  .pickhead h2{margin:0}\n  .tiles{display:grid;gap:9px;grid-template-columns:repeat(auto-fill,minmax(205px,1fr))}\n  .tile{border:1px solid var(--rule);background:var(--panel-2);padding:10px;\n        cursor:pointer;text-align:left;font:inherit;color:var(--ink);display:block}\n  .tile:hover{background:var(--field)}\n  .tile:focus-visible{outline:2px solid var(--warn);outline-offset:1px}\n  .tile[aria-current=true]{border-color:var(--ink);border-width:2px;padding:9px}\n  .tile .tname{margin:7px 0 0;font-size:12.5px;font-weight:600;line-height:1.25}\n  .tile .trole{margin:1px 0 0;font-size:11px;color:var(--ink-2)}\n  .tile .tstat{margin:6px 0 0;font-size:10.5px;color:var(--ink-2);\n               font-family:ui-monospace,Menlo,Consolas,monospace}\n  .grp{background:var(--panel);border:1px solid var(--rule);padding:10px 12px 12px}\n  .grp h2{font-size:12px;font-weight:600;margin:0 0 8px;color:var(--ink-2)}\n  .row{display:grid;grid-template-columns:52px 1fr 66px;gap:8px;align-items:center;\n       margin-bottom:6px}\n  .row label{font-size:12px}\n  input[type=range]{width:100%;accent-color:var(--ink)}\n  input[type=number],select{\n    width:100%;padding:3px 5px;border:1px solid var(--rule);\n    background:var(--panel-2);color:var(--ink);font-size:13px;\n    font-family:inherit;\n  }\n  input[type=number]{font-family:ui-monospace,Menlo,Consolas,monospace}\n  .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}\n  .btns button{\n    padding:5px 9px;border:1px solid var(--rule);background:var(--panel-2);\n    color:var(--ink);font:inherit;font-size:12px;cursor:pointer\n  }\n  .btns button:hover{background:var(--field)}\n  .btns button:focus-visible{outline:2px solid var(--warn);outline-offset:1px}\n  .eq{margin-top:11px;border-top:1px solid var(--rule);padding-top:9px}\n  .eq .f{margin:0 0 3px;font-family:ui-monospace,Menlo,Consolas,monospace;\n         font-size:11px;line-height:1.65;color:var(--ink);word-spacing:-1px}\n  .eq .f2{color:var(--ink-2)}\n  .terms{display:flex;height:12px;margin:9px 0 5px;border:1px solid var(--rule);\n         background:var(--panel-2)}\n  .terms i{display:block;min-width:0}\n  .tl{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;font-size:11px;\n      color:var(--ink-2)}\n  .tl b{display:block;font-weight:400;font-size:14px;color:var(--ink)}\n  table{border-collapse:collapse;width:100%;font-size:12px}\n  th,td{text-align:right;padding:3px 4px;border-bottom:1px solid var(--rule)}\n  th:first-child,td:first-child{text-align:left}\n  th{font-weight:600;color:var(--ink-2);border-bottom:1px solid var(--ink-2)}\n  td.n{font-family:ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}\n  .apply{cursor:pointer;text-decoration:underline;color:var(--op)}\n  .score{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:12px}\n  .score .val{font-size:16px}\n  .note{font-size:11px;color:var(--ink-2);margin:8px 0 0}\n  @media (prefers-reduced-motion:reduce){*{transition:none!important}}\n</style>\n</head>\n<body>\n\n<h1>Loop 101 &mdash; tuning bench</h1>\n<p class=\"sub\">Simulated plant, ISA-form controller. Everything runs in Node-RED; this page just watches it.\n<span id=\"ver\" class=\"val\"></span></p>\n\n<div class=\"bench\">\n  <div class=\"trend\"><canvas id=\"cv\" width=\"1100\" height=\"680\"></canvas></div>\n\n  <div class=\"face\">\n    <div class=\"fp\">\n      <div class=\"bar\"><i id=\"bpv\" style=\"background:var(--pv)\"></i></div>\n      <div><p class=\"lbl\">PV</p><p class=\"num val\" id=\"npv\">--</p></div>\n    </div>\n    <div class=\"fp\">\n      <div class=\"bar\"><i id=\"bsp\" style=\"background:var(--sp)\"></i></div>\n      <div><p class=\"lbl\">SP</p><p class=\"num val\" id=\"nsp\">--</p></div>\n    </div>\n    <div class=\"fp\">\n      <div class=\"bar\"><i id=\"bop\" style=\"background:var(--op)\"></i></div>\n      <div><p class=\"lbl\">OP</p><p class=\"num val\" id=\"nop\">--</p></div>\n    </div>\n    <div class=\"mode\">\n      <button id=\"bAuto\" aria-pressed=\"true\">Auto</button>\n      <button id=\"bMan\" aria-pressed=\"false\">Manual</button>\n    </div>\n  </div>\n</div>\n\n<div class=\"chain\">\n\n  <div class=\"grp\">\n    <h2>Process</h2>\n    <div class=\"idcard\">\n      <span class=\"glyph\" id=\"plantIcon\"></span>\n      <div>\n        <p class=\"idname\" id=\"plantName\">&mdash;</p>\n        <p class=\"idrole\" id=\"plantRole\"></p>\n        <p class=\"pips\" id=\"plantPips\"></p>\n      </div>\n    </div>\n    <button class=\"pick\" id=\"bPick\">Change process&hellip;</button>\n    <p class=\"note\" id=\"pnote\" style=\"margin:0 0 10px\"></p>\n    <div class=\"row\"><label for=\"model\">Type</label>\n      <select id=\"model\" style=\"grid-column:2/4\">\n        <option value=\"fopdt\">Self-regulating (flow, temp)</option>\n        <option value=\"integrating\">Integrating (level)</option>\n      </select><span></span></div>\n    <div class=\"row\"><label for=\"K\">Gain</label>\n      <input type=\"range\" id=\"K_r\" min=\"0.1\" max=\"6\" step=\"0.05\">\n      <input type=\"number\" id=\"K\" step=\"0.05\"></div>\n    <div class=\"row\"><label for=\"tau\">&tau; s</label>\n      <input type=\"range\" id=\"tau_r\" min=\"0.5\" max=\"90\" step=\"0.5\">\n      <input type=\"number\" id=\"tau\" step=\"0.5\"></div>\n    <div class=\"row\"><label for=\"theta\">&theta; s</label>\n      <input type=\"range\" id=\"theta_r\" min=\"0\" max=\"30\" step=\"0.2\">\n      <input type=\"number\" id=\"theta\" step=\"0.2\"></div>\n    <div class=\"row\"><label for=\"lead\">Inv resp</label>\n      <input type=\"range\" id=\"lead_r\" min=\"0\" max=\"20\" step=\"0.5\">\n      <input type=\"number\" id=\"lead\" step=\"0.5\"></div>\n    <div class=\"row\"><label for=\"tau2\">2nd lag</label>\n      <input type=\"range\" id=\"tau2_r\" min=\"0\" max=\"60\" step=\"0.05\">\n      <input type=\"number\" id=\"tau2\" step=\"0.05\"></div>\n    <div class=\"row\"><label for=\"zeta2\">&zeta;&#8322;</label>\n      <input type=\"range\" id=\"zeta2_r\" min=\"0.02\" max=\"1.5\" step=\"0.01\">\n      <input type=\"number\" id=\"zeta2\" step=\"0.01\"></div>\n    <div class=\"row\"><label for=\"noise\">Noise</label>\n      <input type=\"range\" id=\"noise_r\" min=\"0\" max=\"3\" step=\"0.05\">\n      <input type=\"number\" id=\"noise\" step=\"0.05\"></div>\n    <div class=\"row\"><label for=\"dist\">Load</label>\n      <input type=\"range\" id=\"dist_r\" min=\"-30\" max=\"30\" step=\"1\">\n      <input type=\"number\" id=\"dist\" step=\"1\"></div>\n    <div class=\"btns\">\n      <button data-load=\"10\">Bump load +10</button>\n      <button data-load=\"0\">Clear load</button>\n    </div>\n    <p class=\"note\" id=\"clock\"></p>\n  </div>\n\n  <div class=\"link\">\n    <span class=\"tag\" id=\"pvName\">PV</span>\n    <span class=\"sig\" id=\"sigPV\">--</span>\n    <span class=\"ar\"></span>\n  </div>\n\n  <div class=\"grp\">\n    <h2>Controller</h2>\n    <div class=\"row\"><label for=\"sp\">SP</label>\n      <input type=\"range\" id=\"sp_r\" min=\"0\" max=\"100\" step=\"0.5\">\n      <input type=\"number\" id=\"sp\" step=\"0.5\"></div>\n    <div class=\"row\"><label for=\"Kc\">Kc</label>\n      <input type=\"range\" id=\"Kc_r\" min=\"0\" max=\"8\" step=\"0.01\">\n      <input type=\"number\" id=\"Kc\" step=\"0.01\"></div>\n    <div class=\"row\"><label for=\"Ti\">Ti s</label>\n      <input type=\"range\" id=\"Ti_r\" min=\"0\" max=\"120\" step=\"0.2\">\n      <input type=\"number\" id=\"Ti\" step=\"0.1\"></div>\n    <div class=\"row\"><label for=\"Td\">Td s</label>\n      <input type=\"range\" id=\"Td_r\" min=\"0\" max=\"30\" step=\"0.1\">\n      <input type=\"number\" id=\"Td\" step=\"0.1\"></div>\n    <div class=\"row\"><label for=\"bias\">Bias</label>\n      <input type=\"range\" id=\"bias_r\" min=\"0\" max=\"100\" step=\"0.5\">\n      <input type=\"number\" id=\"bias\" step=\"0.5\"></div>\n    <div class=\"row\"><label for=\"opMan\">Man OP</label>\n      <input type=\"range\" id=\"opMan_r\" min=\"0\" max=\"100\" step=\"0.5\">\n      <input type=\"number\" id=\"opMan\" step=\"0.5\"></div>\n    <div class=\"btns\">\n      <button data-step=\"10\">SP +10</button>\n      <button data-step=\"-10\">SP &minus;10</button>\n      <button id=\"bBump\">Bump test +15</button>\n      <button id=\"bReset\">Reset loop</button>\n    </div>\n\n    <div class=\"eq\">\n      <p class=\"f\" id=\"eqSym\"></p>\n      <p class=\"f f2\" id=\"eqNum\"></p>\n      <div class=\"terms\">\n        <i id=\"tP\"></i><i id=\"tI\"></i><i id=\"tD\"></i><i id=\"tB\"></i>\n      </div>\n      <div class=\"tl\">\n        <span>P<b class=\"val\" id=\"vP\">--</b></span>\n        <span>I<b class=\"val\" id=\"vI\">--</b></span>\n        <span>D<b class=\"val\" id=\"vD\">--</b></span>\n        <span>bias<b class=\"val\" id=\"vB\">--</b></span>\n      </div>\n      <p class=\"note\" id=\"eqNote\"></p>\n    </div>\n  </div>\n\n  <div class=\"link\">\n    <span class=\"tag\">OP</span>\n    <span class=\"sig\" id=\"sigOP\">--</span>\n    <span class=\"ar\"></span>\n  </div>\n\n  <div class=\"grp\">\n    <h2>Final control element</h2>\n    <p class=\"mvline\" id=\"mvName\">&mdash;</p>\n    <p class=\"fceline\" id=\"fceName\"></p>\n    <div class=\"fp\" style=\"margin-bottom:9px\">\n      <div class=\"bar\"><i id=\"bact\" style=\"background:var(--warn)\"></i></div>\n      <div><p class=\"lbl\">Actuator position</p><p class=\"num val\" id=\"nact\">--</p></div>\n    </div>\n    <div class=\"row\"><label for=\"rate\">Slew /s</label>\n      <input type=\"range\" id=\"rate_r\" min=\"0\" max=\"50\" step=\"0.5\">\n      <input type=\"number\" id=\"rate\" step=\"0.5\"></div>\n    <div class=\"row\"><label for=\"opMin\">Min %</label>\n      <input type=\"range\" id=\"opMin_r\" min=\"0\" max=\"100\" step=\"1\">\n      <input type=\"number\" id=\"opMin\" step=\"1\"></div>\n    <div class=\"row\"><label for=\"opMax\">Max %</label>\n      <input type=\"range\" id=\"opMax_r\" min=\"0\" max=\"100\" step=\"1\">\n      <input type=\"number\" id=\"opMax\" step=\"1\"></div>\n    <p class=\"note\" id=\"fceNote\"></p>\n    <p class=\"note\" id=\"satNote\"></p>\n  </div>\n\n</div>\n\n<p class=\"ret\"><span>&#8629;</span> actuator position <b id=\"sigACT\">--</b>\n  returns to the process &mdash; this is the loop closing.</p>\n\n<div class=\"rail\">\n\n  <div class=\"grp\">\n    <h2>Last disturbance</h2>\n    <div class=\"score\">\n      <span>IAE</span><span class=\"val\" id=\"mIae\">--</span>\n      <span>Overshoot</span><span class=\"val\" id=\"mOs\">--</span>\n      <span>Settled (2%)</span><span class=\"val\" id=\"mSet\">--</span>\n      <span>Elapsed</span><span class=\"val\" id=\"mT\">--</span>\n    </div>\n    <p class=\"note\">Resets on every setpoint or load change. Lower IAE is a better tune, but check the OP trace &mdash; a tune that thrashes the valve to win on IAE will not survive a real plant.</p>\n  </div>\n\n  <div class=\"grp\">\n    <h2>Tuning rules for this plant</h2>\n    <table>\n      <thead><tr><th>Rule</th><th>Kc</th><th>Ti</th><th>Td</th><th></th></tr></thead>\n      <tbody id=\"rules\"></tbody>\n    </table>\n    <p class=\"note\" id=\"rulenote\"></p>\n    <p class=\"note\">Computed from the true plant constants above, which you would not have in the field &mdash; do a bump test and identify them first, then check yourself against this.</p>\n  </div>\n\n</div>\n\n<div class=\"pickwrap\" id=\"pickWrap\" style=\"display:none\">\n  <div class=\"pickbox\">\n    <div class=\"pickhead\">\n      <h2>Choose a process</h2>\n      <button id=\"pickClose\" class=\"pick\" style=\"width:auto;margin:0\">Close</button>\n    </div>\n    <div class=\"tiles\" id=\"tiles\"></div>\n    <p class=\"note\">Pips are difficulty, worked out from the dynamics: dead-time dominance, integrating behaviour, inverse response, a resonant mode, a rate-limited actuator. Add a plant to the process library node and it gets scored the same way.</p>\n  </div>\n</div>\n\n<script>\n(function(){\nvar $=function(id){return document.getElementById(id)};\nvar API=location.pathname.replace(/\\/$/,'');\nvar cfg={}, pts=[], last=0, WINDOW=180000;\n\nfunction post(body){\n  return fetch(API+'/cmd',{method:'POST',headers:{'Content-Type':'application/json'},\n    body:JSON.stringify(body)});\n}\n\n/* ---- bound slider + number pairs ---- */\nvar pairs=['sp','Kc','Ti','Td','bias','opMan','K','tau','theta','noise','dist',\n           'lead','tau2','zeta2','rate','opMin','opMax'];\npairs.forEach(function(k){\n  var n=$(k), r=$(k+'_r');\n  function send(v){ var o={}; o[k]=v; post(o); }\n  r.addEventListener('input',function(){ n.value=r.value; send(r.value); });\n  n.addEventListener('change',function(){ r.value=n.value; send(n.value); });\n});\n$('model').addEventListener('change',function(){ post({model:this.value,reset:true}); });\n\nvar plants={};\n\n/* stroke glyphs, drawn in the same line weight as the rest of the panel */\nvar ICONS={\n hx:'<svg viewBox=\"0 0 24 24\"><rect x=\"2.5\" y=\"7\" width=\"19\" height=\"10\"/><path d=\"M5 12h2.5l2-3.2 2 6.4 2-6.4 2 3.2H19\"/></svg>',\n sun:'<svg viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.2 5.2l1.9 1.9M16.9 16.9l1.9 1.9M18.8 5.2l-1.9 1.9M7.1 16.9l-1.9 1.9\"/></svg>',\n sunweak:'<svg viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"8.5\" r=\"3.2\"/><path d=\"M12 2.2v2M5.6 8.5H3.6M20.4 8.5h-2M7.2 3.7l1.4 1.4M16.8 3.7l-1.4 1.4\"/><path d=\"M2.5 19l3.6-2.6 2.7 1.9 3.6-3.4 2.7 1.9 3.6-2.4\"/></svg>',\n drum:'<svg viewBox=\"0 0 24 24\"><rect x=\"2.5\" y=\"6\" width=\"19\" height=\"12\" rx=\"2.5\"/><path d=\"M2.5 13.2c3.2 0 3.2-2 6.3-2s3.2 2 6.4 2 3.2-2 6.3-2\"/></svg>',\n coil:'<svg viewBox=\"0 0 24 24\"><rect x=\"2.5\" y=\"15\" width=\"19\" height=\"4.5\" rx=\"1\"/><path d=\"M6 12.2c0-2 2-2 2-4s-2-1.8-2-3.8M12 12.2c0-2 2-2 2-4s-2-1.8-2-3.8M18 12.2c0-2 2-2 2-4s-2-1.8-2-3.8\"/></svg>',\n wind:'<svg viewBox=\"0 0 24 24\"><path d=\"M12 12.6V21M12 10.6V2.8M12.9 11.4l6.8 3.9M11.1 11.4l-6.8 3.9\"/><circle cx=\"12\" cy=\"11.6\" r=\"1.5\"/></svg>',\n generic:'<svg viewBox=\"0 0 24 24\"><rect x=\"3\" y=\"6\" width=\"18\" height=\"12\" rx=\"2\"/><path d=\"M7 12h10\"/></svg>'\n};\nfunction icon(pl){ return ICONS[pl && pl.icon] || ICONS.generic; }\n\n/* difficulty is derived, so a plant you add yourself gets scored too */\nfunction difficulty(pl){\n  var d=1, th=pl.theta||0;\n  if(pl.model==='integrating'){\n    d++;                                  // no self-regulation to help you\n    if(th>0) d++;\n  } else {\n    // half rule, so a second lag counts toward the ratio that actually\n    // decides how much gain you can have\n    var t=Math.max(pl.tau||1,0.1), de=th;\n    if(pl.tau2>0 && pl.zeta2>=0.7){ t+=pl.tau2/2; de+=pl.tau2/2; }\n    var r=de/t;\n    if(r>0.3) d++;\n    if(r>1.0) d++;\n  }\n  if(pl.lead>0){ d++; if(pl.lead>th) d++; }   // inverse response, and severe\n  if(pl.tau2>0) d += (pl.zeta2<0.4) ? 2 : 1;  // a resonance is the worst of these\n  if(pl.rate>0) d++;\n  return Math.min(5,d);\n}\nfunction pips(n){ var s=''; for(var i=0;i<5;i++) s+=(i<n?'\\u25cf':'\\u25cb'); return s; }\nfunction statLine(pl){\n  if(pl.model==='integrating')\n    return 'Integrating \\u00b7 k\\u2032 '+pl.Ki+' \\u00b7 \\u03b8 '+pl.theta+' s'+\n           (pl.lead>0?' \\u00b7 inverse '+pl.lead+' s':'');\n  return 'FOPDT \\u00b7 K '+pl.K+' \\u00b7 \\u03c4 '+pl.tau+' s \\u00b7 \\u03b8 '+pl.theta+' s'+\n         (pl.tau2>0?' \\u00b7 2nd '+pl.tau2+' s':'');\n}\n\nfunction buildTiles(){\n  var box=$('tiles'); box.innerHTML='';\n  Object.keys(plants).forEach(function(k){\n    var pl=plants[k];\n    var t=document.createElement('button');\n    t.className='tile'; t.dataset.k=k; t.type='button';\n    t.setAttribute('aria-current', k===cfg.preset ? 'true':'false');\n    t.innerHTML='<span class=\"glyph\">'+icon(pl)+'</span>'+\n      '<p class=\"tname\">'+pl.name+'</p>'+\n      '<p class=\"trole\">'+(pl.role||'')+'</p>'+\n      '<p class=\"pips\">'+pips(difficulty(pl))+'</p>'+\n      '<p class=\"tstat\">'+statLine(pl)+'</p>';\n    t.addEventListener('click',function(){\n      pts=[]; last=0; closePick(); post({preset:k});\n    });\n    box.appendChild(t);\n  });\n}\nfunction openPick(){ buildTiles(); $('pickWrap').style.display='flex'; }\nfunction closePick(){ $('pickWrap').style.display='none'; }\n$('bPick').addEventListener('click',openPick);\n$('pickClose').addEventListener('click',closePick);\n$('pickWrap').addEventListener('click',function(e){ if(e.target===$('pickWrap')) closePick(); });\n\n/* the identity card, and the two ends of the chain */\nfunction identity(){\n  var pl=plants[cfg.preset];\n  if(!pl) return;\n  $('plantIcon').innerHTML=icon(pl);\n  $('plantName').textContent=pl.name;\n  $('plantRole').textContent=pl.role||'';\n  $('plantPips').textContent=pips(difficulty(pl));\n  $('pnote').textContent=pl.note||'';\n  $('pvName').textContent=pl.pv||'PV';\n  $('mvName').textContent=pl.mv||'Controller output, %';\n  $('fceName').textContent=pl.fce||'Generic final control element';\n  $('fceNote').textContent=pl.fceNote||'';\n  // keep the picker's current marker honest even while it is closed\n  var box=$('tiles');\n  if(box) Array.prototype.forEach.call(box.children,function(t){\n    t.setAttribute('aria-current', t.dataset.k===cfg.preset ? 'true':'false');\n  });\n}\n\nfunction loadPlants(){\n  return fetch(API+'/plants',{cache:'no-store'}).then(function(r){\n    if(!r.ok) throw new Error('HTTP '+r.status);\n    return r.json();\n  }).then(function(d){\n    var keys=Object.keys(d||{});\n    if(!keys.length) throw new Error('library empty');\n    plants=d;\n    $('ver').textContent=' v3, '+keys.length+' processes';\n    identity(); buildTiles();\n  }).catch(function(e){\n    $('ver').textContent=' v3, process library FAILED';\n    $('pnote').textContent='Could not load '+API+'/plants ('+e.message+\n      '). Open that URL directly: a 404 means an older PID Lab flow is still deployed and '+\n      'is answering on this path first -- delete the old tab and redeploy.';\n  });\n}\nloadPlants();\n$('bAuto').addEventListener('click',function(){ post({auto:true}); });\n$('bMan').addEventListener('click',function(){ post({auto:false,opMan:cfg.opMan}); });\n$('bReset').addEventListener('click',function(){ pts=[]; last=0; post({reset:true}); });\n$('bBump').addEventListener('click',function(){\n  var v=Math.max(0,Math.min(100,(cfg.op!=null?cfg.op:cfg.opMan)+15));\n  post({auto:false,opMan:v,event:true});\n});\ndocument.querySelectorAll('[data-step]').forEach(function(b){\n  b.addEventListener('click',function(){\n    var v=Math.max(0,Math.min(100,(cfg.sp||50)+Number(b.dataset.step)));\n    $('sp').value=v; $('sp_r').value=v; post({sp:v});\n  });\n});\ndocument.querySelectorAll('[data-load]').forEach(function(b){\n  b.addEventListener('click',function(){\n    var v=Number(b.dataset.load);\n    $('dist').value=v; $('dist_r').value=v; post({dist:v});\n  });\n});\n\n/* ---- tuning rules ---- */\nfunction rules(c){\n  var out=[];\n  // Skogestad half rule: fold an overdamped second lag half into tau,\n  // half into dead time. Inverse response counts as dead time outright.\n  var t=c.tau, d=Math.max(c.theta,0.05);\n  if(c.tau2>0 && c.zeta2>=0.7){ t+=c.tau2/2; d+=c.tau2/2; }\n  if(c.tau2>0 && c.zeta2<0.7)  { d+=2*c.zeta2*c.tau2; }\n  if(c.lead>0) d+=c.lead;\n\n  if(c.model==='integrating'){\n    var kp=c.Ki, lam=Math.max(d,0.5);\n    out.push(['SIMC PI (lam=th)', 1/(kp*(lam+d)), 4*(lam+d), 0]);\n    out.push(['SIMC PI (lam=2th)',1/(kp*(2*lam+d)), 4*(2*lam+d), 0]);\n    out.push(['averaging level', 0.4/(kp*(lam+d)), 10*(lam+d), 0]);\n  } else {\n    var K=c.K;\n    var lam=Math.max(0.1*t,0.8*d);\n    out.push(['IMC PI', t/(K*(lam+d)), t, 0]);\n    out.push(['IMC PID',(t+0.5*d)/(K*(lam+0.5*d)), t+0.5*d, t*d/(2*t+d)]);\n    out.push(['Z-N PI', 0.9*t/(K*d), 3.33*d, 0]);\n    out.push(['Z-N PID',1.2*t/(K*d), 2*d, 0.5*d]);\n    out.push(['Cohen-Coon PI',(1/K)*(t/d)*(0.9+d/(12*t)),\n              d*(30+3*d/t)/(9+20*d/t), 0]);\n  }\n  var rn=$('rulenote');\n  rn.textContent = (t!==c.tau || d!==Math.max(c.theta,0.05))\n    ? 'Second lag and inverse response folded in by the half rule: effective tau '+\n      t.toFixed(1)+' s, effective dead time '+d.toFixed(1)+' s.' : '';\n  var tb=$('rules'); tb.innerHTML='';\n  out.forEach(function(r){\n    var tr=document.createElement('tr');\n    tr.innerHTML='<td>'+r[0]+'</td><td class=\"n\">'+r[1].toFixed(2)+\n      '</td><td class=\"n\">'+r[2].toFixed(1)+'</td><td class=\"n\">'+r[3].toFixed(1)+\n      '</td><td><span class=\"apply\">use</span></td>';\n    tr.querySelector('.apply').addEventListener('click',function(){\n      $('Kc').value=r[1].toFixed(2); $('Kc_r').value=r[1];\n      $('Ti').value=r[2].toFixed(1); $('Ti_r').value=r[2];\n      $('Td').value=r[3].toFixed(1); $('Td_r').value=r[3];\n      post({Kc:r[1],Ti:r[2],Td:r[3]});\n    });\n    tb.appendChild(tr);\n  });\n}\n\n/* ---- the controller equation, symbolic and live ---- */\nfunction equation(c){\n  var err = (c.action==='reverse') ? 'SP\\u2212PV' : 'PV\\u2212SP';\n  var sym = 'OP = Kc\\u00b7e', num = 'OP = ' + (+c.Kc).toFixed(2) + '\\u00b7e';\n  if(c.Ti>0){ sym += ' + (Kc/Ti)\\u222be dt';\n              num += ' + ('+(+c.Kc).toFixed(2)+'/'+(+c.Ti).toFixed(1)+')\\u222be dt'; }\n  if(c.Td>0){ sym += ' \\u2212 Kc\\u00b7Td\\u00b7dPVf/dt';\n              num += ' \\u2212 '+(+c.Kc).toFixed(2)+'\\u00b7'+(+c.Td).toFixed(1)+'\\u00b7dPVf/dt'; }\n  sym += ' + b';  num += ' + ' + (+c.bias).toFixed(1);\n  $('eqSym').textContent = sym + ',   e = ' + err;\n  $('eqNum').textContent = num;\n\n  var n=[];\n  if(c.Ti<=0) n.push('Integral off, so bias is the only thing setting where the output sits \\u2014 this is manual reset, and it is what removes proportional offset.');\n  else n.push('With integral action the integral absorbs any bias change within a few Ti, so bias only bumps the output in passing.');\n  if(c.Td>0) n.push('Tf = Td/N = '+(c.Td/(c.N||10)).toFixed(2)+' s.');\n  n.push('Output clamped '+(+c.opMin).toFixed(0)+'\\u2013'+(+c.opMax).toFixed(0)+'%.');\n  $('eqNote').textContent = n.join(' ');\n}\nfunction terms(c,m){\n  var t=[['tP','vP',m.p||0,css('--op')],['tI','vI',m.i||0,css('--pv')],\n         ['tD','vD',m.d||0,css('--sp')],['tB','vB',c.bias||0,css('--warn')]];\n  var tot=0; t.forEach(function(x){tot+=Math.abs(x[2])}); if(!tot) tot=1;\n  t.forEach(function(x){\n    $(x[0]).style.width=(100*Math.abs(x[2])/tot)+'%';\n    $(x[0]).style.background=x[3];\n    $(x[1]).textContent=x[2].toFixed(1);\n  });\n}\n\n/* ---- strip chart ---- */\nvar cv=$('cv'), cx=cv.getContext('2d');\nfunction fit(){\n  var d=window.devicePixelRatio||1, w=cv.clientWidth, h=cv.clientHeight;\n  cv.width=w*d; cv.height=h*d; cx.setTransform(d,0,0,d,0,0);\n  return {w:w,h:h};\n}\nfunction css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}\nfunction draw(){\n  var g=fit(), w=g.w, h=g.h;\n  var pad=34, splitY=Math.round(h*0.70);\n  cx.clearRect(0,0,w,h);\n  if(!pts.length) return;\n  var t1=pts[pts.length-1][0], t0=t1-WINDOW;\n  var X=function(t){return pad+(t-t0)/WINDOW*(w-pad-6)};\n\n  function pane(y0,y1,lo,hi,ticks){\n    cx.strokeStyle=css('--rule'); cx.lineWidth=1;\n    cx.fillStyle=css('--ink-2'); cx.font='10px ui-monospace,monospace';\n    cx.textAlign='right'; cx.textBaseline='middle';\n    ticks.forEach(function(v){\n      var y=Math.round(y1-(v-lo)/(hi-lo)*(y1-y0))+0.5;\n      cx.globalAlpha=.45; cx.beginPath(); cx.moveTo(pad,y); cx.lineTo(w-6,y); cx.stroke();\n      cx.globalAlpha=1; cx.fillText(v,pad-5,y);\n    });\n    return function(v){return y1-(v-lo)/(hi-lo)*(y1-y0)};\n  }\n  var Y1=pane(8,splitY-16,0,100,[0,25,50,75,100]);\n  var Y2=pane(splitY+6,h-14,0,100,[0,50,100]);\n\n  function line(idx,Y,color,wid){\n    cx.strokeStyle=color; cx.lineWidth=wid; cx.beginPath();\n    var started=false;\n    for(var i=0;i<pts.length;i++){\n      var p=pts[i]; if(p[0]<t0) continue;\n      var x=X(p[0]), y=Y(p[idx]);\n      if(!started){cx.moveTo(x,y);started=true}else{cx.lineTo(x,y)}\n    }\n    cx.stroke();\n  }\n  line(1,Y1,css('--sp'),1.5);\n  line(2,Y1,css('--pv'),1.8);\n  line(3,Y2,css('--op'),1.5);\n  if(cfg.rate>0) line(4,Y2,css('--warn'),1.2);   // where the actuator actually got to\n\n  cx.textAlign='left'; cx.font='11px system-ui,sans-serif';\n  cx.fillStyle=css('--pv'); cx.fillText('PV',pad+4,16);\n  cx.fillStyle=css('--sp'); cx.fillText('SP',pad+28,16);\n  cx.fillStyle=css('--op'); cx.fillText('OP',pad+4,splitY+16);\n  if(cfg.rate>0){ cx.fillStyle=css('--warn'); cx.fillText('actuator',pad+28,splitY+16); }\n  cx.fillStyle=css('--ink-2'); cx.textAlign='right';\n  cx.fillText(Math.round(WINDOW/1000)+' s window',w-8,h-2);\n}\n\n/* ---- poll ---- */\nfunction fill(c){\n  pairs.forEach(function(k){\n    if(c[k]===undefined) return;\n    if(document.activeElement===$(k)||document.activeElement===$(k+'_r')) return;\n    $(k).value=(+c[k]).toFixed(2).replace(/\\.00$/,''); $(k+'_r').value=c[k];\n  });\n  if(document.activeElement!==$('model')) $('model').value=c.model;\n  if(c.window) WINDOW=c.window*1000;\n  identity();\n  var sp=(c.ts||0.2)/0.2;\n  $('clock').textContent='Scan '+(c.ts).toFixed(2)+' s. Trend runs at '+\n    (sp>=1?sp.toFixed(0)+'x real time':(1/sp).toFixed(0)+'x slow motion')+'.';\n  $('bAuto').setAttribute('aria-pressed',c.auto?'true':'false');\n  $('bMan').setAttribute('aria-pressed',c.auto?'false':'true');\n}\nfunction bar(el,v){ el.style.height=Math.max(0,Math.min(100,v))+'%'; }\n\nvar tick=0;\nfunction poll(){\n  fetch(API+'/state?since='+last,{cache:'no-store'}).then(function(r){return r.json()})\n  .then(function(d){\n    var changed = JSON.stringify(d.cfg)!==JSON.stringify(cfg);\n    cfg=d.cfg;\n    if(d.pts.length){ pts=pts.concat(d.pts); last=d.pts[d.pts.length-1][0]; }\n    while(pts.length && pts[0][0] < last-WINDOW-5000) pts.shift();\n    if(changed){ fill(cfg); rules(cfg); equation(cfg); }\n    var m=d.m;\n    terms(cfg,m);\n    $('npv').textContent=m.pv.toFixed(1);\n    $('nsp').textContent=(+cfg.sp).toFixed(1);\n    $('nop').textContent=m.op.toFixed(1);\n    bar($('bpv'),m.pv); bar($('bsp'),cfg.sp); bar($('bop'),m.op);\n    var act=(m.opRL==null?m.op:m.opRL);\n    $('sigPV').textContent=m.pv.toFixed(1)+' %';\n    $('sigOP').textContent=m.op.toFixed(1)+' %';\n    $('sigACT').textContent=act.toFixed(1)+' %';\n    $('nact').textContent=act.toFixed(1);\n    bar($('bact'),act);\n    var sat=(m.op>=cfg.opMax-0.01)?'Output is on its upper limit.'\n          :(m.op<=cfg.opMin+0.01)?'Output is on its lower limit.':'';\n    var lag=(cfg.rate>0 && Math.abs(m.op-act)>0.5)\n          ? ' Actuator is '+Math.abs(m.op-act).toFixed(1)+\n            '% behind the command \\u2014 you are asking for motion the drive cannot deliver.':'';\n    $('satNote').textContent=sat+lag;\n    $('mIae').textContent=m.iae.toFixed(1);\n    $('mOs').textContent=(m.overshoot==null)?'--':m.overshoot.toFixed(1)+'%';\n    $('mSet').textContent=m.settle?m.settle.toFixed(1)+' s':'--';\n    $('mT').textContent=m.tEvent.toFixed(0)+' s';\n    draw();\n  }).catch(function(){});\n}\nsetInterval(poll,300);\nwindow.addEventListener('resize',draw);\npoll();\n})();\n</script>\n</body>\n</html>\n",
+    "output": "str",
+    "x": 330,
+    "y": 260,
+    "wires": [
+      [
+        "n_pageout"
+      ]
+    ]
+  },
+  {
+    "id": "n_pageout",
+    "type": "http response",
+    "z": "pidlab_tab",
+    "name": "",
+    "statusCode": "",
+    "headers": {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store, must-revalidate"
+    },
+    "x": 500,
+    "y": 260,
+    "wires": []
+  },
+  {
+    "id": "n_stin",
+    "type": "http in",
+    "z": "pidlab_tab",
+    "name": "",
+    "url": "/pidlab/state",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 320,
+    "wires": [
+      [
+        "n_st"
+      ]
+    ]
+  },
+  {
+    "id": "n_st",
+    "type": "function",
+    "z": "pidlab_tab",
+    "name": "state",
+    "func": "var c = flow.get('cfg') || {}, s = flow.get('st') || {}, h = flow.get('hist') || [];\nvar since = Number((msg.req.query && msg.req.query.since) || 0);\n\nvar pts = since ? h.filter(function (p) { return p[0] > since; }) : h;\nif (pts.length > 1200) pts = pts.slice(-1200);\n\nvar step = c.sp - (s.pvAtEvent || 0);\nvar os = null;\nif (Math.abs(step) > 1) os = 100 * (s.peak - c.sp) / step;\n\nmsg.payload = {\n  now: s.simT || 0,\n  cfg: c,\n  pts: pts,\n  m: {\n    pv: s.pv, op: s.op, opRL: s.opRL, i: s.I, p: s.P, d: s.D, e: s.e,\n    iae: s.iae, settle: s.tSettle, tEvent: s.tEvent,\n    simT: s.simT, speed: (c.ts || 0.2) / 0.2,\n    overshoot: os\n  }\n};\nmsg.headers = { 'Cache-Control': 'no-store' };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 320,
+    "wires": [
+      [
+        "n_stout"
+      ]
+    ]
+  },
+  {
+    "id": "n_stout",
+    "type": "http response",
+    "z": "pidlab_tab",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 500,
+    "y": 320,
+    "wires": []
+  },
+  {
+    "id": "n_plin",
+    "type": "http in",
+    "z": "pidlab_tab",
+    "name": "",
+    "url": "/pidlab/plants",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 440,
+    "wires": [
+      [
+        "n_plfn"
+      ]
+    ]
+  },
+  {
+    "id": "n_plfn",
+    "type": "function",
+    "z": "pidlab_tab",
+    "name": "list plants",
+    "func": "msg.payload = flow.get('plants') || {};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 440,
+    "wires": [
+      [
+        "n_plout"
+      ]
+    ]
+  },
+  {
+    "id": "n_plout",
+    "type": "http response",
+    "z": "pidlab_tab",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 500,
+    "y": 440,
+    "wires": []
+  },
+  {
+    "id": "n_cmdin",
+    "type": "http in",
+    "z": "pidlab_tab",
+    "name": "",
+    "url": "/pidlab/cmd",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 380,
+    "wires": [
+      [
+        "n_cmd"
+      ]
+    ]
+  },
+  {
+    "id": "n_cmd",
+    "type": "function",
+    "z": "pidlab_tab",
+    "name": "command",
+    "func": "var c = flow.get('cfg'), s = flow.get('st');\nvar b = msg.payload || {};\n\n// selecting a plant from the library\nif (b.preset) {\n  var lib = flow.get('plants') || {};\n  var pl = lib[b.preset];\n  if (pl) {\n    Object.keys(pl).forEach(function (k) {\n      if (k !== 'name' && k !== 'note') c[k] = pl[k];\n    });\n    c.preset = b.preset;\n    c.auto = false;               // every new plant starts in manual\n    c.dist = 0;\n    // pv0 is where the plant sits at the starting output; back out the bias\n    if (pl.pv0 !== undefined) {\n      c.pvBias = (c.model === 'integrating') ? pl.pv0 : pl.pv0 - c.K * c.opMan;\n    }\n    b.reset = true;\n  }\n}\n\nif (b.reset) {\n  // Start settled at the manual output, with the actuator already there --\n  // otherwise the plant sees a step before the controller's first pass.\n  var pv0 = (c.model === 'integrating') ? c.pvBias : c.K * c.opMan + c.pvBias;\n  s.simT = 0;\n  s.pvTrue = s.pv = s.pvf = s.pvfPrev = s.lag1 = s.y2 = pv0;\n  s.v2 = 0;\n  s.op = s.opRL = c.opMan;\n  s.I = (c.Ti > 0) ? (c.opMan - c.bias) : 0;\n  s.P = 0; s.D = 0; s.e = 0;\n  s.delay = [];\n  s.iae = 0; s.tEvent = 0; s.pvAtEvent = pv0; s.peak = pv0; s.tSettle = 0;\n  flow.set('hist', []);\n}\n\nvar numeric = ['ts','window','K','tau','theta','Ki','lead','tau2','zeta2','rate','pvBias','noise','dist',\n               'sp','Kc','Ti','Td','bias','N','opMan','opMin','opMax'];\nnumeric.forEach(function (k) {\n  if (b[k] !== undefined && b[k] !== null && b[k] !== '') {\n    var v = Number(b[k]);\n    if (!isNaN(v)) { if (v !== c[k]) { if (k === 'sp' || k === 'dist') b.event = true; } c[k] = v; }\n  }\n});\nif (b.model !== undefined)  c.model  = b.model;\nif (b.action !== undefined) c.action = b.action;\nif (b.auto !== undefined)   c.auto   = !!b.auto;\nif (b.extPID !== undefined) c.extPID = !!b.extPID;\n\nif (b.event) {\n  s.iae = 0; s.tEvent = 0; s.pvAtEvent = s.pv; s.peak = s.pv; s.tSettle = 0;\n}\n\nflow.set('cfg', c);\nflow.set('st', s);\nmsg.payload = { ok: true };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 380,
+    "wires": [
+      [
+        "n_cmdout"
+      ]
+    ]
+  },
+  {
+    "id": "n_cmdout",
+    "type": "http response",
+    "z": "pidlab_tab",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 500,
+    "y": 380,
+    "wires": []
+  },
+  {
+    "id": "n_cmt",
+    "type": "comment",
+    "z": "pidlab_tab",
+    "name": "Open  http://<pi>:1880/pidlab",
+    "info": "The scan inject drives plant -> PID once per Ts.\nChange Ts in the 'init context' node AND the inject repeat rate together.",
+    "x": 190,
+    "y": 210,
+    "wires": []
+  }
+]
