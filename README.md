@@ -1,3 +1,11 @@
+
+# Intro
+
+PID tuning lab to practice process control with several different plant process dynamics. My main objective at first was as a training tool but I would also like to extend to preliminary studies of new process dynamics or quick tests.
+
+### Disclaimer 
+This is clearly all Claude-coded as I needed to have something quick to practice with. I will be spot-checking to make sure the process dynamics are accurate.
+
 # Loop 101 — a PID tuning bench
 
 Two builds, generated from the same source, so they cannot drift apart:
