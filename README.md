@@ -8,53 +8,40 @@ This is clearly all Claude-coded as I needed to have something quick to practice
 
 # Loop 101 — a PID tuning bench
 
-Two builds, generated from the same source, so they cannot drift apart:
+A simulated plant, an honest ISA-form PID, and a strip chart.
 
-- **`pid-lab.html`** — one static file, ~37 kB. Open it locally or drop it on any web host.
-  No server, no build step, no CDN, no network of any kind. Everything below applies except
-  the OpenPLC bridge, which needs a runtime that can speak Modbus TCP.
-- **`pid-lab-flow.json`** — the Node-RED flow, for running on the Pi alongside OpenPLC.
-
-The plant model, the controller, and the process library are byte-identical between them —
-the static build emits the same six function bodies and serves `/state`, `/cmd` and `/plants`
-locally instead of over HTTP.
-
-A simulated plant, an honest ISA-form PID, and a strip chart, running entirely on core
-Node-RED nodes. No palette installs, no dashboard dependency, no CDN. Open a browser at
-`/pidlab` and start bumping the loop.
-
-The second file hands the controller over to OpenPLC across Modbus TCP, so you can tune
-against a real PLC scan cycle instead of a JavaScript function.
+**`pidlab.html`** — one static file, ~49 kB. Open it locally or drop it on any web host.
+No server, no build step, no CDN, no network of any kind. The plant model, the controller
+and the process library all live in that one file, and it answers its own `/state`, `/cmd`
+and `/plants` calls in the page rather than over HTTP.
 
 ---
 
-## Install — static
+## Install
 
-Open `pid-lab.html`. That's it. To publish it, copy the single file anywhere that serves
+Open `pidlab.html`. That's it. To publish it, copy the single file anywhere that serves
 static content.
+
+It is hosted on the Rizomatix site at **`/pidlab`**, with a description and the exercise list
+at **`/lab`**. That copy is vendored into
+[the site repository](https://github.com/alexanderkuesel/Rhizomatix) at
+`public/pidlab/index.html` and refreshed with `npm run sync:pidlab`, which pulls `pidlab.html`
+from `main` here and records the upstream commit and both hashes in `pidlab.lock.json`.
+
+The only downstream change is a Rizomatix bar injected after `<body>`, so a visitor can get
+back out to the site — the site needs it and a file opened off a USB stick does not, which is
+why it is not in this repo. It sits between two marker comments and nothing else is touched,
+so deleting that block reproduces this file byte-for-byte. A change pushed here reaches the
+site by re-running that one command.
 
 The simulation runs on a 200 ms browser timer, one scan per tick, with the sim clock
 advancing by `cfg.ts`. A background tab pauses rather than fast-forwarding, which is the
 same as unplugging the trend pen — nothing is lost, it just stops.
 
-## Install — Node-RED
-
-1. **Delete any earlier PID Lab tab first** (tab menu → Delete), then Deploy. Two copies both
-   register `GET /pidlab`, the older one answers first, and you get the old page with no
-   plant dropdown. The current tab is labelled **PID Lab v2** so duplicates are obvious.
-2. Menu (top right) → **Import** → **select a file to import** → `pid-lab-flow.json`
-3. Import as **new flow**. Deploy.
-4. Browse to `http://<your-pi>:1880/pidlab` and hard-refresh (Ctrl/Cmd-Shift-R).
-
-The header shows `v2, 6 plants` once the library loads. If it says `plant library FAILED`,
-open `http://<your-pi>:1880/pidlab/plants` directly — a 404 means an older flow is still
-deployed and answering first.
+The header shows `v3, 6 processes` once the library loads.
 
 The loop starts in **manual at 30 % output**, which is where you'd actually start on a
 live plant. Bump it, watch the response, identify the plant, then go to auto.
-
-To change the scan period, edit `ts` in the **init context** node *and* the repeat rate on
-the **scan 200 ms** inject. They have to match — nothing enforces it.
 
 ---
 
@@ -88,8 +75,8 @@ that belong to the actuator rather than the process: slew limit and output trave
 warns you when the output is on a limit, or when the actuator is falling behind the command —
 which is exactly what a too-aggressive tune on a rate-limited drive looks like.
 
-The definitions live in the **process library** function node, not in the web page — see
-[Adding your own plant](#adding-your-own-plant).
+The definitions live in the **process library** block near the top of the file, not in the
+page markup — see [Adding your own plant](#adding-your-own-plant).
 
 | Preset | What it is | What it teaches |
 |---|---|---|
@@ -169,7 +156,7 @@ port tuning constants out of here, check the units before you trust them.
 
 ### Verified behaviour
 
-Run against the flow's own function nodes:
+Run against the file's own simulation and controller code:
 
 | Check | Result |
 |---|---|
@@ -185,8 +172,8 @@ Run against the flow's own function nodes:
 | Bias with Ti = 0 | `PV = 10 + bias` to within 0.2 % across bias 30–60; integral stays at zero |
 | Bumpless transfer, bias set | 35.00 → 34.90 at both bias 0 and bias 30 |
 | Term arithmetic | `P + I + D + b` equals OP to 1e-6, and `P = Kc·e` to 1e-9 |
-| Static build | same regression run against `pid-lab.html` in a fake DOM: identical open-loop step (63.99), slew cap (6.00 %/s), inverse response (dips to 37.6, crosses at 9 s), bias offset removal, and term arithmetic |
-| Deploy chain | firing the seed inject and following the wires leaves `cfg`, `st`, `hist` and `plants` all set |
+| In a fake DOM | full regression against `pidlab.html` headless: open-loop step 63.99, slew cap 6.00 %/s, inverse response dipping to 37.6 and crossing at 9 s, bias offset removal, and term arithmetic |
+| Seed chain | loading the page leaves `cfg`, `st`, `hist` and `plants` all set |
 | Weak-grid retune | strong-grid IMC tune hunts at 6.8 % on the weak grid; retuning removes it |
 
 The gap in that last row is the half-scan of zero-order-hold lag, which is real and would
@@ -198,8 +185,8 @@ so it's dynamics rather than a numerical artifact.
 
 ## Adding your own plant
 
-Open the **process library** node and add an entry. Every field is optional — anything you
-leave out keeps its current value.
+Find the **process library** block in `pidlab.html` and add an entry. Every field is
+optional — anything you leave out keeps its current value.
 
 ```js
 my_loop: {
@@ -226,7 +213,7 @@ my_loop: {
 }
 ```
 
-Deploy and it appears in the dropdown. Selecting a plant always resets the loop to manual
+Reload and it appears in the picker. Selecting a plant always resets the loop to manual
 with the plant settled at `pv0`, so you start every session the way you'd start on site.
 
 Time compression is `ts / 0.2`. If a plant's time constant is in minutes, raise `ts` rather
@@ -310,119 +297,19 @@ actively misleading, because none of those rules know the structure is there.
 
 ---
 
-## Handing the loop to OpenPLC
+## The in-page API
 
-`pid-lab-openplc-bridge.json` replaces the internal controller with your PLC, so PV goes
-out over Modbus TCP and OP comes back — with real comms latency and real 16-bit register
-quantisation in the path.
+The page talks to itself through three routes, answered in the page rather than over the
+network:
 
-**Import.** Open the **PID Lab** tab first, then Import → paste → choose **current flow**
-(these nodes share the tab's flow context). Needs `node-red-contrib-modbus`.
-
-Keep the plant on `ts = 0.2` when the bridge is driving. Process time advances one `ts` per
-200 ms tick, so a compressed preset would run the simulation faster than Modbus can answer.
-
-**Enable.** `curl -X POST localhost:1880/pidlab/cmd -H 'Content-Type: application/json' -d '{"extPID":true}'`
-The plant, trend, and scoring keep running; only the controller changes hands.
-
-**Registers.** OpenPLC v3 maps `%MW0..%MW1023` to holding registers **1024..2047**, and
-`%QW0..%QW1023` to holding registers **0..1023**. The bridge defaults to `%MW0` for PV and
-`%MW1` for OP. There are reports of `%MW` not reading back correctly inside the runtime on
-some builds where `%QW` worked — if you hit that, change `PV_REG`/`OP_REG` to 0 and 1 at
-the top of the two function nodes and relocate your PLC variables. Newer OpenPLC Edge
-builds let you configure the buffer mapping directly, so check your version's address page
-rather than trusting these numbers.
-
-Values are carried as 0–10000 for 0.00–100.00 %, giving 0.01 % resolution.
-
-**Controller.** Structured Text equivalent of the JS block. Call it from a task at 200 ms
-to match `TS`:
-
-```iecst
-FUNCTION_BLOCK PID_ISA
-VAR_INPUT
-  PV      : REAL;
-  SP      : REAL;
-  KC      : REAL := 1.0;
-  TI      : REAL := 20.0;   (* seconds; 0 disables integral *)
-  TD      : REAL := 0.0;    (* seconds *)
-  TS      : REAL := 0.2;    (* must equal the task interval *)
-  AUTO    : BOOL := TRUE;
-  OP_MAN  : REAL := 30.0;
-  OP_MIN  : REAL := 0.0;
-  OP_MAX  : REAL := 100.0;
-END_VAR
-VAR_OUTPUT
-  OP : REAL;
-END_VAR
-VAR
-  I_TERM, PVF, PVF_PREV : REAL;
-  E, P_TERM, D_TERM, OP_RAW, TF : REAL;
-  N : REAL := 10.0;
-  FIRST : BOOL := TRUE;
-END_VAR
-
-IF FIRST THEN
-  PVF := PV; PVF_PREV := PV; I_TERM := OP_MAN; FIRST := FALSE;
-END_IF;
-
-E := SP - PV;                          (* reverse acting *)
-
-IF TD > 0.0 THEN TF := TD / N; ELSE TF := TS; END_IF;
-PVF := PVF + (TS / (TF + TS)) * (PV - PVF);
-IF TD > 0.0 THEN
-  D_TERM := -1.0 * KC * TD * (PVF - PVF_PREV) / TS;   (* D on PV, no kick *)
-ELSE
-  D_TERM := 0.0;
-END_IF;
-PVF_PREV := PVF;
-
-P_TERM := KC * E;
-
-IF AUTO AND (TI > 0.0) THEN
-  I_TERM := I_TERM + KC * (TS / TI) * E;
-END_IF;
-
-OP_RAW := P_TERM + I_TERM + D_TERM;
-
-IF NOT AUTO THEN
-  I_TERM := OP_MAN - P_TERM - D_TERM;                 (* track for bumpless *)
-  OP := OP_MAN;
-ELSIF OP_RAW > OP_MAX THEN
-  OP := OP_MAX;  I_TERM := OP_MAX - P_TERM - D_TERM;  (* back-calculation *)
-ELSIF OP_RAW < OP_MIN THEN
-  OP := OP_MIN;  I_TERM := OP_MIN - P_TERM - D_TERM;
-ELSE
-  OP := OP_RAW;
-END_IF;
-END_FUNCTION_BLOCK
-```
-
-Wrap it in a program that reads PV from `%MW0` (divide by 100), calls the block, and writes
-`OP * 100` to `%MW1`.
-
----
-
-## HTTP interface
-
-| Endpoint | Purpose |
+| Route | Purpose |
 |---|---|
-| `GET /pidlab` | the page |
 | `GET /pidlab/state?since=<ms>` | config, metrics, and trend points newer than `since` |
 | `GET /pidlab/plants` | the process library as JSON |
-| `POST /pidlab/cmd` | `{"preset":"boiler_drum"}`, `{"sp":60}`, `{"Kc":1.4,"Ti":12,"Td":0}`, `{"auto":true}`, `{"dist":10}`, `{"reset":true}`, `{"extPID":true}` |
+| `POST /pidlab/cmd` | `{"preset":"boiler_drum"}`, `{"sp":60}`, `{"Kc":1.4,"Ti":12,"Td":0}`, `{"auto":true}`, `{"dist":10}`, `{"reset":true}` |
 
-Anything you can set in the UI you can set from a script, so you can drive repeatable test
-sequences or log runs into TimescaleDB alongside the rest of your instrumentation.
-
-## What the static build gives up
-
-Only the OpenPLC bridge. A browser cannot open a Modbus TCP socket, so if you want the PLC
-in the loop you need the Node-RED build (or a small WebSocket-to-Modbus relay, which puts a
-server back in the picture and defeats the point).
-
-Everything else is intact, and a few things are better: no polling latency, no Pi required,
-and it works offline.
+Anything you can set in the UI you can set from the browser console against those routes, so
+a repeatable test sequence is a short script rather than a lot of clicking.
 
 ## Worth adding later
 
