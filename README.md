@@ -10,10 +10,10 @@ This is clearly all Claude-coded as I needed to have something quick to practice
 
 Two builds, generated from the same source, so they cannot drift apart:
 
-- **`pid-lab.html`** — one static file, ~37 kB. Open it locally or drop it on any web host.
+- **`pidlab.html`** — one static file, ~49 kB. Open it locally or drop it on any web host.
   No server, no build step, no CDN, no network of any kind. Everything below applies except
   the OpenPLC bridge, which needs a runtime that can speak Modbus TCP.
-- **`pid-lab-flow.json`** — the Node-RED flow, for running on the Pi alongside OpenPLC.
+- **`node-red/nr-pidlab.json`** — the Node-RED flow, for running on the Pi alongside OpenPLC.
 
 The plant model, the controller, and the process library are byte-identical between them —
 the static build emits the same six function bodies and serves `/state`, `/cmd` and `/plants`
@@ -30,8 +30,16 @@ against a real PLC scan cycle instead of a JavaScript function.
 
 ## Install — static
 
-Open `pid-lab.html`. That's it. To publish it, copy the single file anywhere that serves
+Open `pidlab.html`. That's it. To publish it, copy the single file anywhere that serves
 static content.
+
+It is hosted on the Rizomatix site at **`/pidlab`**, with a description and the exercise list
+at **`/lab`**. That copy is vendored into
+[the site repository](https://github.com/alexanderkuesel/Rhizomatix) at
+`public/pidlab/index.html` and refreshed with `npm run sync:pidlab`, which pulls `pidlab.html`
+from `main` here and records the upstream commit in `pidlab.lock.json`. The file is copied
+byte-for-byte and never edited downstream, so a change pushed here reaches the site by re-running
+that one command — nothing in the site build depends on the bench's internals.
 
 The simulation runs on a 200 ms browser timer, one scan per tick, with the sim clock
 advancing by `cfg.ts`. A background tab pauses rather than fast-forwarding, which is the
@@ -42,7 +50,7 @@ same as unplugging the trend pen — nothing is lost, it just stops.
 1. **Delete any earlier PID Lab tab first** (tab menu → Delete), then Deploy. Two copies both
    register `GET /pidlab`, the older one answers first, and you get the old page with no
    plant dropdown. The current tab is labelled **PID Lab v2** so duplicates are obvious.
-2. Menu (top right) → **Import** → **select a file to import** → `pid-lab-flow.json`
+2. Menu (top right) → **Import** → **select a file to import** → `node-red/nr-pidlab.json`
 3. Import as **new flow**. Deploy.
 4. Browse to `http://<your-pi>:1880/pidlab` and hard-refresh (Ctrl/Cmd-Shift-R).
 
@@ -185,7 +193,7 @@ Run against the flow's own function nodes:
 | Bias with Ti = 0 | `PV = 10 + bias` to within 0.2 % across bias 30–60; integral stays at zero |
 | Bumpless transfer, bias set | 35.00 → 34.90 at both bias 0 and bias 30 |
 | Term arithmetic | `P + I + D + b` equals OP to 1e-6, and `P = Kc·e` to 1e-9 |
-| Static build | same regression run against `pid-lab.html` in a fake DOM: identical open-loop step (63.99), slew cap (6.00 %/s), inverse response (dips to 37.6, crosses at 9 s), bias offset removal, and term arithmetic |
+| Static build | same regression run against `pidlab.html` in a fake DOM: identical open-loop step (63.99), slew cap (6.00 %/s), inverse response (dips to 37.6, crosses at 9 s), bias offset removal, and term arithmetic |
 | Deploy chain | firing the seed inject and following the wires leaves `cfg`, `st`, `hist` and `plants` all set |
 | Weak-grid retune | strong-grid IMC tune hunts at 6.8 % on the weak grid; retuning removes it |
 
