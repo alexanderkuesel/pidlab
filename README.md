@@ -1,7 +1,15 @@
-# pidlab
-Claude-coded PID practice lab in Node-Red with visual interface
+# Loop 101 — a PID tuning bench
 
-# Loop 101 — a PID tuning bench in Node-RED
+Two builds, generated from the same source, so they cannot drift apart:
+
+- **`pid-lab.html`** — one static file, ~37 kB. Open it locally or drop it on any web host.
+  No server, no build step, no CDN, no network of any kind. Everything below applies except
+  the OpenPLC bridge, which needs a runtime that can speak Modbus TCP.
+- **`pid-lab-flow.json`** — the Node-RED flow, for running on the Pi alongside OpenPLC.
+
+The plant model, the controller, and the process library are byte-identical between them —
+the static build emits the same six function bodies and serves `/state`, `/cmd` and `/plants`
+locally instead of over HTTP.
 
 A simulated plant, an honest ISA-form PID, and a strip chart, running entirely on core
 Node-RED nodes. No palette installs, no dashboard dependency, no CDN. Open a browser at
@@ -12,7 +20,16 @@ against a real PLC scan cycle instead of a JavaScript function.
 
 ---
 
-## Install
+## Install — static
+
+Open `pid-lab.html`. That's it. To publish it, copy the single file anywhere that serves
+static content.
+
+The simulation runs on a 200 ms browser timer, one scan per tick, with the sim clock
+advancing by `cfg.ts`. A background tab pauses rather than fast-forwarding, which is the
+same as unplugging the trend pen — nothing is lost, it just stops.
+
+## Install — Node-RED
 
 1. **Delete any earlier PID Lab tab first** (tab menu → Delete), then Deploy. Two copies both
    register `GET /pidlab`, the older one answers first, and you get the old page with no
@@ -35,10 +52,35 @@ the **scan 200 ms** inject. They have to match — nothing enforces it.
 
 ## What the simulation actually does
 
-### Picking a plant
+### The loop, laid out as a loop
 
-The **Plant** dropdown at the top of the plant panel switches between processes. The
-definitions live in the **process library** function node, not in the web page — see
+The lower half of the page is the control loop drawn left to right:
+
+```
+  ┌─ Process ──┐  PV  ┌─ Controller ─┐  OP  ┌─ Final control element ─┐
+  │  identity  │ ───► │  SP, Kc, Ti  │ ───► │  MV name, slew, limits  │
+  │  dynamics  │      │  Td, bias    │      │  actuator position      │
+  └────────────┘      └──────────────┘      └────────────┬────────────┘
+         ▲                                               │
+         └──────────── actuator position ────────────────┘
+```
+
+The connectors carry live values, so you can watch a number leave the controller as OP and
+arrive at the process as a different number once the actuator has rate-limited it.
+
+**Change process…** opens a picker grid. Each tile carries a glyph, the plant's role in one
+phrase, its dynamics, and a difficulty rating in pips. Difficulty is *derived*, not stored:
+dead-time dominance (via the half rule), integrating behaviour, inverse response, a resonant
+mode, and a rate-limited actuator each add to it. A plant you add yourself gets scored the
+same way. Current spread: Bench 1, PV volt/VAR 3, superheat 3, wind 4, drum level 5.
+
+The **final control element** card is where the abstraction ends and hardware starts. It
+names the manipulated variable and the device actually being driven, and it holds the things
+that belong to the actuator rather than the process: slew limit and output travel limits. It
+warns you when the output is on a limit, or when the actuator is falling behind the command —
+which is exactly what a too-aggressive tune on a rate-limited drive looks like.
+
+The definitions live in the **process library** function node, not in the web page — see
 [Adding your own plant](#adding-your-own-plant).
 
 | Preset | What it is | What it teaches |
@@ -135,6 +177,7 @@ Run against the flow's own function nodes:
 | Bias with Ti = 0 | `PV = 10 + bias` to within 0.2 % across bias 30–60; integral stays at zero |
 | Bumpless transfer, bias set | 35.00 → 34.90 at both bias 0 and bias 30 |
 | Term arithmetic | `P + I + D + b` equals OP to 1e-6, and `P = Kc·e` to 1e-9 |
+| Static build | same regression run against `pid-lab.html` in a fake DOM: identical open-loop step (63.99), slew cap (6.00 %/s), inverse response (dips to 37.6, crosses at 9 s), bias offset removal, and term arithmetic |
 | Deploy chain | firing the seed inject and following the wires leaves `cfg`, `st`, `hist` and `plants` all set |
 | Weak-grid retune | strong-grid IMC tune hunts at 6.8 % on the weak grid; retuning removes it |
 
@@ -163,7 +206,15 @@ my_loop: {
   rate: 0,                    // actuator slew limit, %/s
   pv0: 50,                    // where PV sits at the starting output
   noise: 0.5,
-  opMan: 50, sp: 50
+  opMan: 50, sp: 50,
+
+  // shown on the tile and in the chain cards
+  icon: 'drum',                       // hx | sun | sunweak | drum | coil | wind | generic
+  role: 'Integrating, no self-regulation',
+  pv:  'Basin level, % of span',      // labels the Process -> Controller connector
+  mv:  'Makeup valve position, %',    // headline of the final control element card
+  fce: 'Butterfly valve, electric actuator',
+  fceNote: 'One line on how the device actually behaves.'
 }
 ```
 
@@ -355,6 +406,15 @@ Wrap it in a program that reads PV from `%MW0` (divide by 100), calls the block,
 
 Anything you can set in the UI you can set from a script, so you can drive repeatable test
 sequences or log runs into TimescaleDB alongside the rest of your instrumentation.
+
+## What the static build gives up
+
+Only the OpenPLC bridge. A browser cannot open a Modbus TCP socket, so if you want the PLC
+in the loop you need the Node-RED build (or a small WebSocket-to-Modbus relay, which puts a
+server back in the picture and defeats the point).
+
+Everything else is intact, and a few things are better: no polling latency, no Pi required,
+and it works offline.
 
 ## Worth adding later
 
